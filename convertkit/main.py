@@ -1,4 +1,6 @@
-import requests
+#!/usr/bin/env python
+
+import logging
 from unittest import TestCase
 
 import requests
@@ -174,15 +176,62 @@ class FormTestCase(TestCase):
         f = Form(None, None, {'test': 1})
         self.assertEqual(f.test, 1)
 
+
 if __name__ == '__main__':
     import os, sys
     from pprint import pprint
+    import argparse
+    import yaml
 
-    key = os.getenv('CONVERTKIT_API_KEY')
-    if not key:
-        print("You must specify the CONVERTKIT_API_KEY environment variable")
+    cli = argparse.ArgumentParser()
+    cli.add_argument("-C", dest="credentials", action="store", default="creds.yaml",
+                     type=lambda x: yaml.safe_load(open(x)),
+                     help="Credentials config file (default: %(default)s)")
+    cli.add_argument("-v", "--verbose", action="store_true", help="Provide verbose informative messages")
+    cli.add_argument("-d", "--debug", action="store_true", help=argparse.SUPPRESS)
+    cli.add_argument("--form-id", type=int, action="store", help="form identifier to operate against")
+    cli.add_argument("--subscriber", nargs=2, metavar="EMAIL FIRST_NAME", action="store",
+                     help="subscribe an individual to a form or tag")
+    cli.add_argument("command", action="store", help="Command to execute",
+                     # really should generate with inspection
+                     choices=["list_forms", "account", "sequences", "tags", "list-subscriptions", "subscribe"])
+    args = cli.parse_args()
+
+    if args.debug:
+        loglevel = logging.DEBUG
+    elif args.verbose:
+        loglevel = logging.INFO
+    else:
+        loglevel = logging.WARN
+    logging.basicConfig(level=loglevel)
+    log = logging.getLogger("ConvertKit.cli")
+
+    key = args.credentials['api_key']
+    secret = args.credentials['api_secret']
+
+
+    ck = ConvertKit(key, api_secret=secret)
+
+    if args.form_id is not None:
+        form = ck.find_form(form_id=args.form_id)
+        print(form)
+        if args.command == "list-subscriptions":
+            pprint(form.list_subscriptions())
+        if args.command == "subscribe":
+            if not args.subscriber:
+                log.error("You must specify a subscriber with --subscribe")
+                sys.exit(1)
+            email, name = args.subscriber
+            subscription = form.add_subscriber(email, name)
+            print(subscription)
+        sys.exit(0)
+
+    method = getattr(ck, args.command)
+    if not method:
+        log.error(f"Couldn't find execution method for API endpoint {args.command}")
         sys.exit(1)
-
-    ck = ConvertKit(key)
-    forms = ck.forms.list()
-    pprint([(x.id, x.name) for x in forms])
+    results = method()
+    try:
+        print("\n".join(map(str, results)))
+    except TypeError:
+        pprint(results)
