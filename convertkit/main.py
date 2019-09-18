@@ -38,7 +38,7 @@ class SubscriptionMixin:
         if not self.api.api_secret:
             raise APIError("Form subscription listing endpoint needs API secret")
         factory = lambda response: [Subscription(x, api=self.api) for x in response['subscriptions']]
-        resp = self.api.GET(f'{self.MODEL_ENDPOINT}/{self.id}/subscriptions', factory=factory, api_secret=self.api.api_secret)
+        resp = self.api.GET(f'{self.MODEL_ENDPOINT}/{self.id}/subscriptions', field="subscriptions", factory=factory, api_secret=self.api.api_secret)
         self.log.info(f"{self} subscriptions: {resp}")
         return resp
 
@@ -92,11 +92,12 @@ class ConvertKit(object):
         self.requester = requester or requests
         self.log = logging.getLogger(self.__class__.__name__)
 
-    def GET(self, endpoint, factory=None, params=None, **kwargs):
+    def GET(self, endpoint, field=None, factory=None, params=None, page=1, **kwargs):
         """Make a GET request to an API endpoint
         """
         params = dict(params) if params is not None else {}
         params["api_key"]=self.api_key
+        params["page"]=page
         params.update(kwargs)
         resp = self.requester.get(
             ''.join([self.BASE_URL, endpoint]),
@@ -104,13 +105,22 @@ class ConvertKit(object):
         self.log.debug(f"Response: {resp}  status: {resp.status_code}   json: {resp.json()}")
         if resp.status_code >= 300:
             raise APIError(resp.content)
+        response = resp.json()
+        objects = response.get(field) if field else []
+        if response.get("page", 1) != response.get("total_pages", 1):
+            self.log.info("Found %d pages, requesting next page (%s)", response["total_pages"], page+1)
+            objects = objects + self.GET(endpoint, field=field, factory=factory, params=params, page=page+1, **kwargs)
+        if page != 1: 
+            # defer all factory conversions from pagination iteration 
+            return objects
+        response[field] = objects
         if factory:
-            return factory(resp.json())
+            return factory(response)
         else:
-            return resp.json()
+            return response
 
     def POST(self, endpoint, factory=None, params=None, **kwargs):
-        """Make a GET request to an API endpoint
+        """Make a POST request to an API endpoint
         """
         params = dict(params) if params is not None else {}
         params["api_key"]=self.api_key
@@ -129,7 +139,7 @@ class ConvertKit(object):
 
     def list_forms(self):
         factory = lambda response: [Form(x, api=self) for x in response['forms']]
-        resp = self.GET("/forms", factory)
+        resp = self.GET("/forms", field='forms', factory=factory)
         self.log.info(f"list_forms={resp}")
         return resp
 
@@ -155,15 +165,24 @@ class ConvertKit(object):
 
     def sequences(self):
         factory = lambda response: [Course(x, api=self) for x in response['courses']]
-        resp = self.GET("/courses", factory)
+        resp = self.GET("/courses", field="courses", factory=factory)
         self.log.info(f"sequences={resp}")
         return resp
 
     def tags(self):
         factory = lambda response: [Tag(x, api=self) for x in response['tags']]
-        resp = self.GET("/tags", factory)
+        resp = self.GET("/tags", field="tags", factory=factory)
         self.log.info(f"tags={resp}")
         return resp
+
+    def find_tag(self, id=None, name=None):
+        """Searches through the tags and returns the first one matching 
+        either the id or name specified or returns None
+        """
+        for tag in self.tags():
+            if tag.id == id or tag.name == name:
+                return tag
+        return None
 
     def create_tag(self, name, description):
         resp = self.POST("/tags", factory=lambda x: Tag(x, api=self), name=name, description=description)
@@ -171,11 +190,26 @@ class ConvertKit(object):
         return resp
 
 
+
 class FormTestCase(TestCase):
     def test_attrs_accessible_like_object(self):
         f = Form(None, None, {'test': 1})
         self.assertEqual(f.test, 1)
 
+def output(objects, field=None):
+    log=logging.getLogger("ObjectGenerator")
+    for obj in objects:
+        if field in ("all", None):
+            print(obj)
+        else:
+            try:
+                print(getattr(obj, field))
+            except KeyError:
+                try:
+                    print(getattr(obj.subscriber, field))
+                except:
+                    log.warn("Couldn't extract %s from %r" %(field, obj))
+                
 
 if __name__ == '__main__':
     import os, sys
@@ -190,6 +224,9 @@ if __name__ == '__main__':
     cli.add_argument("-v", "--verbose", action="store_true", help="Provide verbose informative messages")
     cli.add_argument("-d", "--debug", action="store_true", help=argparse.SUPPRESS)
     cli.add_argument("--form-id", type=int, action="store", help="form identifier to operate against")
+    cli.add_argument("--tag-id", type=int, action="store", help="tag identifier to operate against")
+    cli.add_argument("--tag-name", action="store", help="tag name to operate against")
+    cli.add_argument("--output-fields", choices=["email_address", "id", "all"], action="store", default="all", help="output to show")
     cli.add_argument("--subscriber", nargs=2, metavar="EMAIL FIRST_NAME", action="store",
                      help="subscribe an individual to a form or tag")
     cli.add_argument("command", action="store", help="Command to execute",
@@ -216,7 +253,7 @@ if __name__ == '__main__':
         form = ck.find_form(form_id=args.form_id)
         print(form)
         if args.command == "list-subscriptions":
-            pprint(form.list_subscriptions())
+            output(form.list_subscriptions(), args.output_fields)
         if args.command == "subscribe":
             if not args.subscriber:
                 log.error("You must specify a subscriber with --subscribe")
@@ -224,6 +261,12 @@ if __name__ == '__main__':
             email, name = args.subscriber
             subscription = form.add_subscriber(email, name)
             print(subscription)
+        sys.exit(0)
+
+    if args.tag_id or args.tag_name:
+        tag = ck.find_tag(id=args.tag_id, name=args.tag_name)
+        if args.command == "list-subscriptions":
+            output(tag.list_subscriptions(), args.output_fields)
         sys.exit(0)
 
     method = getattr(ck, args.command)
