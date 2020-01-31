@@ -5,6 +5,11 @@ from unittest import TestCase
 
 import requests
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 
 class APIError(Exception):
     pass
@@ -28,11 +33,19 @@ class APIModel:
     def __repr__(self):
         return f'<{self.__class__.__name__} {" ".join([f"{k}={v!r}" for k,v in self.obj.items()])}>'
 
+
 class SubscriptionMixin:
     """A Mixin for object types that support subscriptions/membership
 
     Requires a class or instance variable MODEL_ENDPOINT
     """
+
+    @property
+    def total_subscriptions(self):
+        """Return how many people are subscribed, without needing to iterate through everyone
+        """
+        return self.obj.get("total_subscriptions")
+
 
     def list_subscriptions(self, sort_order="asc", subscriber_state=None):
         if not self.api.api_secret:
@@ -82,9 +95,17 @@ class Tag(APIModel, SubscriptionMixin):
 
 
 
-
 class ConvertKit(object):
     BASE_URL = "https://api.convertkit.com/v3"
+
+    @classmethod
+    def from_yaml_config(cls, filename):
+        if yaml is None:
+            raise RuntimeError("No YAML library. Can't instantiate client from_config()")
+        config = yaml.safe_load(open(filename))
+        key = config['api_key']
+        secret = config['api_secret']
+        return cls(key, api_secret=secret)
 
     def __init__(self, api_key, api_secret=None, requester=None):
         self.api_key = api_key
@@ -92,8 +113,15 @@ class ConvertKit(object):
         self.requester = requester or requests
         self.log = logging.getLogger(self.__class__.__name__)
 
-    def GET(self, endpoint, field=None, factory=None, params=None, page=1, **kwargs):
+    def GET(self, endpoint, field=None, factory=None, params=None, page=1, lazy=False, **kwargs):
         """Make a GET request to an API endpoint
+
+        endpoint:   API endpoint
+        field:      object contents extracted from this location of the JSON return object
+        factory:    factory function to return object representation of specified field contents
+        params:     query params
+        page:       pagination page we're fetching
+        lazy:       if True, don't do pagination
         """
         params = dict(params) if params is not None else {}
         params["api_key"]=self.api_key
@@ -107,7 +135,7 @@ class ConvertKit(object):
             raise APIError(resp.content)
         response = resp.json()
         objects = response.get(field) if field else []
-        if response.get("page", 1) != response.get("total_pages", 1):
+        if not lazy and response.get("page", 1) != response.get("total_pages", 1):
             self.log.info("Found %d pages, requesting next page (%s)", response["total_pages"], page+1)
             objects = objects + self.GET(endpoint, field=field, factory=factory, params=params, page=page+1, **kwargs)
         if page != 1: 
@@ -169,6 +197,20 @@ class ConvertKit(object):
         self.log.info(f"sequences={resp}")
         return resp
 
+    def find_sequence(self, id=None, name=None, lazy=False):
+        """Pulls stats for a Sequence by name or number
+
+        If lazy is True, only pull data from first page of sequence, don't iterate through pagination results
+        """
+        if not self.api_secret:
+            raise APIError("account endpoint needs API secret")
+        if name is not None:
+            raise NotImplemented("finding a sequence by name not currently supported")
+        factory = lambda response: Course(response, api=self)
+        resp = self.GET(f"/sequences/{id}/subscriptions", factory=factory, api_secret=self.api_secret, lazy=lazy)
+        return resp
+
+
     def tags(self):
         factory = lambda response: [Tag(x, api=self) for x in response['tags']]
         resp = self.GET("/tags", field="tags", factory=factory)
@@ -225,6 +267,7 @@ if __name__ == '__main__':
     cli.add_argument("-d", "--debug", action="store_true", help=argparse.SUPPRESS)
     cli.add_argument("--form-id", type=int, action="store", help="form identifier to operate against")
     cli.add_argument("--tag-id", type=int, action="store", help="tag identifier to operate against")
+    cli.add_argument("--sequence-id", type=int, action="store", help="sequence identifier to operate against")
     cli.add_argument("--tag-name", action="store", help="tag name to operate against")
     cli.add_argument("--output-fields", choices=["email_address", "id", "all"], action="store", default="all", help="output to show")
     cli.add_argument("--subscriber", nargs=2, metavar="EMAIL FIRST_NAME", action="store",
@@ -267,6 +310,11 @@ if __name__ == '__main__':
         tag = ck.find_tag(id=args.tag_id, name=args.tag_name)
         if args.command == "list-subscriptions":
             output(tag.list_subscriptions(), args.output_fields)
+        sys.exit(0)
+
+    if args.sequence_id is not None:
+        sequence = ck.find_sequence(id=args.sequence_id)
+        print(sequence)
         sys.exit(0)
 
     method = getattr(ck, args.command)
