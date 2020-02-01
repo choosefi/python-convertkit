@@ -5,7 +5,7 @@ with open('README.md') as f:
 
 setup(
     name='convertkit',
-    version='0.1',
+    version='0.2',
     description='API Client for ConvertKit v3',
     long_description=readme,
     license='BSD',

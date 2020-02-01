@@ -8,11 +8,11 @@ This is a Python API which aims to implement v3 of the
 
 - [X] List Forms
 - [X] Add subscriber to form
-- [ ] Get Courses for account
-- [ ] Add subscribers to course
-- [ ] Get tags for an account
-- [ ] Add subscriber to a tag
+- [X] Get Courses for account
+- [X] Add subscribers to course
+- [X] Get tags for an account
+- [X] Add subscriber to a tag
 - [ ] Subscribing to multiple tags/forms/courses
 - [ ] Unsubscribe
-- [ ] Subscriber list
+- [X] Subscriber list
 - [ ] Update Subscriber
