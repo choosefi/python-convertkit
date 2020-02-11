@@ -1,0 +1,17 @@
+2.2.0
+======
+ * New routine for pulling total subscriber list and counts
+
+
+2.1.0
+======
+ * Handle paginated results (also added lazy loading)
+ * New routine for operations against Sequences
+
+
+2.0.0
+======
+ * rewrite of the core API elements from prior version maintained by github
+ user justinabrahms
+ * Added CLI interface
+

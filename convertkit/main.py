@@ -34,6 +34,9 @@ class APIModel:
         return f'<{self.__class__.__name__} {" ".join([f"{k}={v!r}" for k,v in self.obj.items()])}>'
 
 
+class FullSubscriberList(APIModel):
+    pass
+
 class SubscriptionMixin:
     """A Mixin for object types that support subscriptions/membership
 
@@ -210,6 +213,15 @@ class ConvertKit(object):
         resp = self.GET(f"/sequences/{id}/subscriptions", factory=factory, api_secret=self.api_secret, lazy=lazy)
         return resp
 
+    def subscribers(self, lazy=False):
+        """Look at total registered subscribers
+        """
+        if not self.api_secret:
+            raise APIError("account endpoint needs API secret")
+        factory = lambda response: FullSubscriberList(response, api=self)
+        resp = self.GET(f"/subscribers/", factory=factory, field="subscribers", api_secret=self.api_secret, lazy=lazy)
+        return resp
+
 
     def tags(self):
         factory = lambda response: [Tag(x, api=self) for x in response['tags']]
@@ -274,7 +286,7 @@ if __name__ == '__main__':
                      help="subscribe an individual to a form or tag")
     cli.add_argument("command", action="store", help="Command to execute",
                      # really should generate with inspection
-                     choices=["list_forms", "account", "sequences", "tags", "list-subscriptions", "subscribe"])
+                     choices=["list_forms", "account", "sequences", "tags", "list-subscriptions", "subscribe", "subscriber-count"])
     args = cli.parse_args()
 
     if args.debug:
@@ -317,7 +329,13 @@ if __name__ == '__main__':
         print(sequence)
         sys.exit(0)
 
-    method = getattr(ck, args.command)
+    if args.command == "subscriber-count":
+        full_subscribers = ck.subscribers(lazy=True)
+        print(full_subscribers.total_subscribers)
+        sys.exit(0)
+
+
+    method = getattr(ck, "_".join(args.command.split("-")))
     if not method:
         log.error(f"Couldn't find execution method for API endpoint {args.command}")
         sys.exit(1)
